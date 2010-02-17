@@ -402,14 +402,14 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
   (when (not (= 3 (length *posix-argv*)))
     (format t 
 "
-usage: convert <input-file-name> <type-descriptor>
+usage: simpledb <input-file-name> <type-descriptor>
 
 <input-file-name> : Prefix of path to .txt file of data (CSV)
 <type-descriptor> : Comma seperated list of column types
 
 example: 
 
-convert test int,string
+simpledb test int,string
 
 ")
     (quit))
