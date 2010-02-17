@@ -341,23 +341,6 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
         (setf back nil))
       (decf queue-length))))
 
-;;** command-line arguments
-
-(when (not (= 3 (length *posix-argv*)))
-  (format t 
-"
-usage: convert <input-file-name> <type-descriptor>
-
-<input-file-name> : Prefix of path to .txt file of data (CSV)
-<type-descriptor> : Comma seperated list of column types
-
-example: 
-
-convert test int,string
-
-")
-  (quit))
-
 ;;** some utility methods
 
 (defun parse-csv-file (file-name type-descriptor)
@@ -412,34 +395,53 @@ convert test int,string
                 (string data)
                 (otherwise nil)))
           type-descriptor string-tuple))
+ 
+(defun main () 
+  ;;** command-line arguments
   
-(let ((input-file-name (concatenate 'string (nth 1 *posix-argv*) ".txt"))
-      (output-file-name (concatenate 'string (nth 1 *posix-argv*) ".dat"))
-      (type-descriptor (mapcar 'read-from-string (cl-ppcre:split "," (nth 2 *posix-argv*)))))
-  (format t "<input-file-name> : ~a~%<output-file-name> : ~a~%<type-descriptor> : ~a~%" 
-          input-file-name output-file-name type-descriptor)
-  (format t "Encoding heap file.~%")
-  (heap-file-encoder input-file-name output-file-name type-descriptor)
-  (clear-bufferpool)
-  (format t "Reading heap file from disk.~%")
-  (let ((heap-file (make-instance 'heap-file
-                                  :file-name output-file-name 
-                                  :type-descriptor type-descriptor)))
-    (print-file heap-file)
-    (format t "Deleting tuples.~%")
-    (delete-tuple heap-file (convert-tuple '("1" "2") type-descriptor))
-    (delete-tuple heap-file (convert-tuple '("3" "4") type-descriptor))
-    (delete-tuple heap-file (convert-tuple '("5" "6") type-descriptor))
-    (format t "Adding tuples.~%")
-    (loop repeat 10 do (add-tuple heap-file (convert-tuple '("200" "200") type-descriptor)))
-    (format t "Dumping back to disk.~%")
-    (write-file heap-file)
+  (when (not (= 3 (length *posix-argv*)))
+    (format t 
+"
+usage: convert <input-file-name> <type-descriptor>
+
+<input-file-name> : Prefix of path to .txt file of data (CSV)
+<type-descriptor> : Comma seperated list of column types
+
+example: 
+
+convert test int,string
+
+")
+    (quit))
+  
+  (let ((input-file-name (concatenate 'string (nth 1 *posix-argv*) ".txt"))
+        (output-file-name (concatenate 'string (nth 1 *posix-argv*) ".dat"))
+        (type-descriptor (mapcar 'read-from-string (cl-ppcre:split "," (nth 2 *posix-argv*)))))
+    (format t "<input-file-name> : ~a~%<output-file-name> : ~a~%<type-descriptor> : ~a~%" 
+            input-file-name output-file-name type-descriptor)
+    (format t "Encoding heap file.~%")
+    (heap-file-encoder input-file-name output-file-name type-descriptor)
     (clear-bufferpool)
     (format t "Reading heap file from disk.~%")
-    (print-file (make-instance 'heap-file
-                               :file-name output-file-name 
-                               :type-descriptor type-descriptor))))
+    (let ((heap-file (make-instance 'heap-file
+                                    :file-name output-file-name 
+                                    :type-descriptor type-descriptor)))
+      (print-file heap-file)
+      (format t "Deleting tuples.~%")
+      (delete-tuple heap-file (convert-tuple '("1" "2") type-descriptor))
+      (delete-tuple heap-file (convert-tuple '("3" "4") type-descriptor))
+      (delete-tuple heap-file (convert-tuple '("5" "6") type-descriptor))
+      (format t "Adding tuples.~%")
+      (loop repeat 10 do (add-tuple heap-file (convert-tuple '("200" "200") type-descriptor)))
+      (format t "Dumping back to disk.~%")
+      (write-file heap-file)
+      (clear-bufferpool)
+      (format t "Reading heap file from disk.~%")
+      (print-file (make-instance 'heap-file
+                                 :file-name output-file-name 
+                                 :type-descriptor type-descriptor))))
+  (quit))
+  
+;;** create binary
 
-;;** exit sbcl
-
-(quit)
+(sb-ext:save-lisp-and-die "simpledb :executable t :toplevel 'main)
