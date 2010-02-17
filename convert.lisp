@@ -12,37 +12,25 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
 
 ;;* Tasks
 
-;; - Add unit tests.
+;; - Add unit tests
 ;; - Implement the catalog (will be needed by the bufferpool to lookup files by table-number)
 ;; - Add bufferpool logic and use *bufferpool-max-size*
 ;; - In delete-tuple-from-page, adjust free-space accordingly
 ;; - Handle searching for free-space better, currently it iterates over full pages
+;; - Need to only write to disk when a page is marked dirty (delete or add occured)
 ;; - Add conditions/errors on bad input
 ;; - Package code
 
 ;;* Ideas
 
 ;; - Can I remove sxhash and just hash the file object itself? Wouldn't that make more sense
-;;   record-id would then contain a pointer to the heap-file itself
+;;   record-id would then contain a pointer to the heap-file itself and no need for a catalog
+;;   (except for looking up the names and column names of tables)
 
 ;;* Code
 
 (require 'cl-ppcre)
 (require 'flexi-streams)
-
-;;** parameters
-
-(defparameter *page-size* 16
-  "The size in bytes of a page.")
-
-(defparameter *offset-size* (ceiling (/ (ceiling (log *page-size* 2)) 8))
-  "The size in bytes of the offsets within a page.")
-
-(defparameter *bufferpool-max-size* nil
-  "Number of pages in the bufferpool")
-
-(defvar *bufferpool* (make-hash-table)
-  "Buffer of pages")
 
 ;;** some helper functions
 
@@ -101,7 +89,8 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
                       :element-type '(unsigned-byte 8))
     (let ((page-count (/ (file-length in) *page-size*)))
       (setf (slot-value f 'page-count) page-count)
-      (format t "Found a heap-file with ~a pages.~%" page-count))))
+      (format t "Found a heap-file with ~a pages.~%" page-count)))
+  (catalog-add-file (sxhash (file-name f)) f))
 
 (defgeneric add-tuple (file tuple)
   (:documentation "Adds a tuple to an file. Returns dirtied pages."))
@@ -195,11 +184,11 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
 (defmethod read-page :around ((file file) page-number)
   (let ((hash (+ (sxhash (file-name file)) page-number)))
     ;; lookup hash in bufferpool
-    (let ((page (gethash hash *bufferpool*)))
+    (let ((page (fetch-from-bufferpool hash)))
       (if page page ;; page is in bufferpool
           (let ((page (call-next-method)))
-            ;; add page to bufferpool
-            (setf (gethash hash *bufferpool*) page)
+            ;; add page to bufferpool, but may need to evict
+            (add-to-bufferpool hash page)
             page)))))
 
 (defclass heap-page (page)
@@ -297,13 +286,60 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
 
 ;; catalog stores the information about tables via a mapping to a table-number
 (defclass catalog ()
-  ((table-number-to-heap-file-map :initarg :table-number-to-heap-file-map :accessor table-number-to-heap-file-map)
-   (table-number-to-table-info-map :initarg :table-number-to-table-info-map :accessor table-number-to-table-info-map)))
+  ((table-files :initform (make-hash-table) :accessor table-files)
+   (table-names :initform (make-hash-table) :accessor table-names)))
+
+(defun clear-catalog ()
+  (setf *catalog* (make-instance 'catalog)))
+
+(defun catalog-lookup-file (table-number)
+  (gethash table-number (table-files *catalog*)))
+
+(defun catalog-add-file (table-number file)
+  (setf (gethash table-number (table-files *catalog*)) file))
 
 ;;** bufferpool
 
+(defclass bufferpool ()
+  ((pool :initform (make-hash-table) :reader pool)
+   (front :initform nil :accessor front)
+   (back :initform nil :accessor back)
+   (queue-length :initform 0 :accessor queue-length)))
+
 (defun clear-bufferpool ()
-  (setq *bufferpool* (make-hash-table)))
+    (setq *bufferpool* (make-instance 'bufferpool)))
+
+(defun fetch-from-bufferpool (id)
+    (gethash id (pool *bufferpool*)))
+
+(defun add-to-bufferpool (id page)
+  (format t "Attempting to add page (~a) to the bufferpool~%" id)
+  ;; if full, evict a page
+  (with-slots (queue-length pool front back) *bufferpool*
+    (when (= queue-length *bufferpool-max-size*)
+      (evict-page-from-bufferpool))
+    ;; add page
+    (setf (gethash id pool) page)
+    (let ((id-node (cons id nil)))
+      (if (zerop queue-length)
+          (setf front id-node)
+          (setf (cdr back) id-node))
+      (setf back id-node))
+    (incf queue-length)))
+
+(defun evict-page-from-bufferpool ()
+  (with-slots (queue-length pool front back) *bufferpool*
+    (let* ((evicted-id (pop front))
+           (evicted-page (gethash evicted-id pool)))
+      (format t "Evicting page (~a) from the bufferpool~%" evicted-id)
+      ;; write evicted-page to disk and remove entry
+      (with-slots (record-id) evicted-page
+        (write-page (catalog-lookup-file (table-number record-id))
+                    evicted-page))
+      (remhash evicted-id pool)
+      (when (not front)
+        (setf back nil))
+      (decf queue-length))))
 
 ;;** command-line arguments
 
@@ -312,12 +348,12 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
 "
 usage: convert <input-file-name> <type-descriptor>
 
-<input-file-name> : Path to CSV file of data
+<input-file-name> : Prefix of path to .txt file of data (CSV)
 <type-descriptor> : Comma seperated list of column types
 
 example: 
 
-convert test.txt int,string
+convert test int,string
 
 ")
   (quit))
@@ -347,6 +383,23 @@ convert test.txt int,string
          do (progn (format t "Adding tuple: ~a~%" tuple) (add-tuple heap-file tuple)))
     (write-file heap-file)
     heap-file))
+
+;;** parameters
+
+(defparameter *page-size* 16
+  "The size in bytes of a page.")
+
+(defparameter *offset-size* (ceiling (/ (ceiling (log *page-size* 2)) 8))
+  "The size in bytes of the offsets within a page.")
+
+(defparameter *bufferpool-max-size* 5
+  "Number of pages in the bufferpool")
+
+(defvar *bufferpool* (make-instance 'bufferpool)
+  "Buffer of pages")
+
+(defvar *catalog* (make-instance 'catalog)
+  "Catalog of information about the database")
 
 ;;** example use case
 
