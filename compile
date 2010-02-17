@@ -444,4 +444,4 @@ convert test int,string
   
 ;;** create binary
 
-(sb-ext:save-lisp-and-die "simpledb :executable t :toplevel 'main)
+(sb-ext:save-lisp-and-die "simpledb" :executable t :toplevel 'main)
