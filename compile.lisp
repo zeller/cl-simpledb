@@ -34,6 +34,13 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
 
 ;;** some helper functions
 
+(defvar *debug* nil
+  "Flag for enabling debugging information to *standard-output*")
+
+(defmacro write-debug (&rest args)
+  (if *debug*
+      `(write-debug ,@args)))
+
 ;; read-null-terminated-ascii and write-null-terminated-ascii from "Practical Common Lisp"
 
 (defconstant +null+ (code-char 0))
@@ -52,6 +59,22 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
   (loop for char across string
        do (write-byte (char-code char) out))
   (write-byte (char-code +null+) out))
+
+(defun read-offset (in)
+  (let ((count 0)
+        (offset 0))
+    (loop repeat *offset-size* do
+         (progn 
+           (setf (ldb (byte 8 offset) count) (read-byte in nil))
+           (incf offset 8)))
+    count))
+
+(defun write-offset (value out)
+  (let ((offset 0))
+    (loop repeat *offset-size* do 
+         (progn
+           (write-byte (ldb (byte 8 offset) value) out)
+           (incf offset 8)))))
 
 ;;** tuple
 
@@ -83,13 +106,13 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
 (defmethod initialize-instance :after ((f file) &key new?)
   (when (and new? (probe-file (file-name f)))
     (delete-file (file-name f)))
-  (with-open-file (in (file-name f) 
+  (with-open-file (in (file-name f)
                       :if-exists :supersede
                       :if-does-not-exist :create 
                       :element-type '(unsigned-byte 8))
     (let ((page-count (/ (file-length in) *page-size*)))
       (setf (slot-value f 'page-count) page-count)
-      (format t "Found a heap-file with ~a pages.~%" page-count)))
+      (write-debug "Found a heap-file with ~a pages.~%" page-count)))
   (catalog-add-file (sxhash (file-name f)) f))
 
 (defgeneric add-tuple (file tuple)
@@ -104,25 +127,23 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
 (defgeneric write-file (file)
   (:documentation "Flushes a file to disk. Needed for testing."))
                      
-(defclass heap-file (file) ())
+(defclass heap-file (file) ((next-free-page-number :initform 0 :accessor next-free-page-number)))
 
 ;; adds a tuple to a file
 ;; note that read-page will create a new page when an invalid page-number is provided
 (defmethod add-tuple ((file heap-file) tuple)
-  (format t "Adding tuple: ~a~%" tuple)
-  (format t "page-count = ~a~%" (page-count file))
   (let (dirtied)
-    (with-slots (page-count type-descriptor) file
-      (loop for page-number from 0 to page-count do 
+    (with-slots (page-count type-descriptor next-free-page-number) file
+      (loop for page-number from next-free-page-number to page-count do 
            (let ((page (add-tuple-to-page (read-page file page-number) tuple type-descriptor)))
-             (if page (push page dirtied)))
+             (if page (push page dirtied) (incf next-free-page-number)))
          until dirtied))
     dirtied))
 
 (defmethod delete-tuple ((file heap-file) tuple)
   (let (dirtied)
     (with-slots (page-count type-descriptor) file
-      (loop for page-number from 0 to (- page-count 1)do 
+      (loop for page-number from 0 to (- page-count 1) do
            (let ((page (delete-tuple-from-page (read-page file page-number) tuple type-descriptor)))
              (if page (push page dirtied)))))
     dirtied))
@@ -142,11 +163,11 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
                                          tuple type-descriptor))) tuples))))))
 
 (defmethod write-file ((file heap-file))
-  (format t "Writing file: ~a (~a)~%" file (file-name file))
-  (format t "Writing pages: ~a~%" (page-count file))
+  (write-debug "Writing file: ~a (~a)~%" file (file-name file))
+  (write-debug "Writing pages: ~a~%" (page-count file))
   (loop for page-number from 0 to (- (page-count file) 1) do 
        (write-page file (read-page file page-number)))
-  (format t "Written.~%"))
+  (write-debug "Written.~%"))
   
 ;;** heap-page
 
@@ -201,56 +222,59 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
             (write-tuple stream tuple type-descriptor))))
 
 (defmethod add-tuple-to-page ((page heap-page) tuple type-descriptor)
-  (format t "Adding tuple to page: ~a~%" tuple)
-  (with-slots (tuples free-space) page
+  (write-debug "Adding tuple to page: ~a~%" tuple)
+  (with-slots (tuples free-space dirty?) page
     (let ((required-space (tuple-size tuple type-descriptor)))
-      (format t "Required space: ~a~%" required-space)
-      (if (< free-space required-space) 
-          (progn 
-            (format t "Not enough free space! (~a < ~a)~%" free-space required-space)
-            nil)
-          (progn 
-            (push tuple tuples)
-            (format t "Free space (before): ~a~%" free-space)
-            (format t "Free space (after): ~a~%" (setf free-space (- free-space required-space)))
-            page)))))
+      (write-debug "Required space: ~a~%" required-space)
+      (cond ((< free-space required-space) 
+             (write-debug "Not enough free space! (~a < ~a)~%" free-space required-space)
+             nil)
+            (t
+             (push tuple tuples)
+             (write-debug "Free space (before): ~a~%" free-space)
+             (setf free-space (- free-space required-space))
+             (write-debug "Free space (after): ~a~%" free-space)
+             (setf dirty? t)
+             page)))))
 
 (defmethod delete-tuple-from-page ((page heap-page) tuple type-descriptor)
-  (with-slots (tuples record-id free-space) page
+  (with-slots (tuples record-id free-space dirty?) page
     (let ((occurances (count tuple tuples :test 'equal)))
       (when (not (zerop occurances))
-        (format t "Deleting ~a occurances of ~a from page ~a.~%" 
+        (write-debug "Deleting ~a occurances of ~a from page ~a.~%" 
                 occurances tuple (page-number record-id))
         (setf tuples (delete tuple tuples :test 'equal))
-        (incf free-space (* (tuple-size tuple type-descriptor) occurances)))))
-  page)
+        (incf free-space (* (tuple-size tuple type-descriptor) occurances))
+        (setf dirty? t)
+        page))))
     
 ;; writes a heap-page to disk
 ;; assumes that the tuples fit on the page, need to check this when adding tuples!
 (defmethod write-page ((file heap-file) (page heap-page))
-  (format t "Writing page~%")
-  (format t "Tuples: ~a~%" (tuples page))
+  (write-debug "Writing page~%")
+  (write-debug "Tuples: ~a~%" (tuples page))
   (with-slots (file-name type-descriptor) file
-    (with-slots (tuples record-id) page
+    (with-slots (tuples record-id dirty?) page
       (with-open-file (f file-name
                          :direction :output 
                          :if-exists :overwrite
                          :if-does-not-exist :create 
                          :element-type '(unsigned-byte 8))
-        (let ((start (+ (* (page-number record-id) *page-size*) 1))
+        (let ((start (+ (* (page-number record-id) *page-size*) *offset-size*))
               (count 0))
           (file-position f start)
           ;; write-out the tuples to disk using the type to encode the field
-          (format t "Writing to location: ~a~%" start)
+          (write-debug "Writing to location: ~a~%" start)
           (mapcar #'(lambda (tuple)
-                      (format t "Writing tuple: ~a (~a)~%" tuple type-descriptor)
+                      (write-debug "Writing tuple: ~a (~a)~%" tuple type-descriptor)
                       (write-tuple f tuple type-descriptor)
                       (incf count)) tuples)
           ;; pad with zeros, although not really necessary, looks good in hexdump
-          (loop repeat (- (+ start *page-size*) (file-position f) 1) do (write-byte 0 f))
+          (loop repeat (- (+ start *page-size*) (file-position f) *offset-size*) do (write-byte 0 f))
           ;; write-out the number of tuples
-          (file-position f (- start 1))
-          (write-byte count f))))))
+          (file-position f (- start *offset-size*))
+          (write-offset count f)))
+      (setf dirty? nil))))
 
 ;; reads a heap-page, given by its page-number, from a heap-file
 (defmethod read-page ((file heap-file) page-number)
@@ -264,15 +288,15 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
                                          :page-number page-number))
           (cond 
             ((< page-number page-count) ;; page-number is valid
-             (format t "Reading page (~a) from file~%" page-number)
+             (write-debug "Reading page (~a) from file~%" page-number)
              (let ((start (* (page-number record-id) *page-size*)))
                (file-position f start)
-               (setf tuples (loop repeat (read-byte f nil) collect (read-tuple f type-descriptor)))
+               (setf tuples (loop repeat (read-offset f) collect (read-tuple f type-descriptor)))
                (setf free-space (- (+ start *page-size*) (file-position f)))))
             ((= page-number page-count) ;; page-number is invalid, but create a new page sequentially
-             (format t "Creating a new page (~a)~%" page-number)
+             (write-debug "Creating a new page (~a)~%" page-number)
              (setf tuples nil)
-             (setf free-space (- *page-size* 1))
+             (setf free-space (- *page-size* *offset-size*))
              (incf page-count))
             (t nil))))) ;; @todo throw an error here, this should never happen
     heap-page))
@@ -313,7 +337,7 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
     (gethash id (pool *bufferpool*)))
 
 (defun add-to-bufferpool (id page)
-  (format t "Attempting to add page (~a) to the bufferpool~%" id)
+  (write-debug "Attempting to add page (~a) to the bufferpool~%" id)
   ;; if full, evict a page
   (with-slots (queue-length pool front back) *bufferpool*
     (when (= queue-length *bufferpool-max-size*)
@@ -331,11 +355,12 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
   (with-slots (queue-length pool front back) *bufferpool*
     (let* ((evicted-id (pop front))
            (evicted-page (gethash evicted-id pool)))
-      (format t "Evicting page (~a) from the bufferpool~%" evicted-id)
+      (write-debug "Evicting page (~a) from the bufferpool~%" evicted-id)
       ;; write evicted-page to disk and remove entry
-      (with-slots (record-id) evicted-page
-        (write-page (catalog-lookup-file (table-number record-id))
-                    evicted-page))
+      (with-slots (record-id dirty?) evicted-page
+        (when dirty?
+          (write-page (catalog-lookup-file (table-number record-id))
+                      evicted-page)))
       (remhash evicted-id pool)
       (when (not front)
         (setf back nil))
@@ -363,19 +388,19 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
                         :type-descriptor type-descriptor 
                         :new? t)))
     (loop for tuple in (parse-csv-file input-file-name type-descriptor)
-         do (progn (format t "Adding tuple: ~a~%" tuple) (add-tuple heap-file tuple)))
+         do (progn (write-debug "Adding tuple: ~a~%" tuple) (add-tuple heap-file tuple)))
     (write-file heap-file)
     heap-file))
 
 ;;** parameters
 
-(defparameter *page-size* 16
+(defparameter *page-size* 65536
   "The size in bytes of a page.")
 
 (defparameter *offset-size* (ceiling (/ (ceiling (log *page-size* 2)) 8))
   "The size in bytes of the offsets within a page.")
 
-(defparameter *bufferpool-max-size* 5
+(defparameter *bufferpool-max-size* 50
   "Number of pages in the bufferpool")
 
 (defvar *bufferpool* (make-instance 'bufferpool)
@@ -400,7 +425,7 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
   ;;** command-line arguments
   
   (when (not (= 3 (length *posix-argv*)))
-    (format t 
+    (write-debug 
 "
 usage: simpledb <input-file-name> <type-descriptor>
 
@@ -417,26 +442,28 @@ simpledb test int,string
   (let ((input-file-name (concatenate 'string (nth 1 *posix-argv*) ".txt"))
         (output-file-name (concatenate 'string (nth 1 *posix-argv*) ".dat"))
         (type-descriptor (mapcar 'read-from-string (cl-ppcre:split "," (nth 2 *posix-argv*)))))
-    (format t "<input-file-name> : ~a~%<output-file-name> : ~a~%<type-descriptor> : ~a~%" 
+    (write-debug "<input-file-name> : ~a~%<output-file-name> : ~a~%<type-descriptor> : ~a~%" 
             input-file-name output-file-name type-descriptor)
-    (format t "Encoding heap file.~%")
+    (write-debug "*offset-size* : ~a~%*page-size* : ~a~%*bufferpool-max-size* : ~a~%"
+            *offset-size* *page-size* *bufferpool-max-size*)
+    (write-debug "Encoding heap file.~%")
     (heap-file-encoder input-file-name output-file-name type-descriptor)
     (clear-bufferpool)
-    (format t "Reading heap file from disk.~%")
+    (write-debug "Reading heap file from disk.~%")
     (let ((heap-file (make-instance 'heap-file
                                     :file-name output-file-name 
                                     :type-descriptor type-descriptor)))
       (print-file heap-file)
-      (format t "Deleting tuples.~%")
+      (write-debug "Deleting tuples.~%")
       (delete-tuple heap-file (convert-tuple '("1" "2") type-descriptor))
       (delete-tuple heap-file (convert-tuple '("3" "4") type-descriptor))
       (delete-tuple heap-file (convert-tuple '("5" "6") type-descriptor))
-      (format t "Adding tuples.~%")
+      (write-debug "Adding tuples.~%")
       (loop repeat 10 do (add-tuple heap-file (convert-tuple '("200" "200") type-descriptor)))
-      (format t "Dumping back to disk.~%")
+      (write-debug "Dumping back to disk.~%")
       (write-file heap-file)
       (clear-bufferpool)
-      (format t "Reading heap file from disk.~%")
+      (write-debug "Reading heap file from disk.~%")
       (print-file (make-instance 'heap-file
                                  :file-name output-file-name 
                                  :type-descriptor type-descriptor))))
