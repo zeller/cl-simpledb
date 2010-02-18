@@ -39,7 +39,7 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
 
 (defmacro write-debug (&rest args)
   (if *debug*
-      `(write-debug ,@args)))
+      `(format t ,@args)))
 
 ;; read-null-terminated-ascii and write-null-terminated-ascii from "Practical Common Lisp"
 
