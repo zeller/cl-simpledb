@@ -9,10 +9,11 @@ phases of the cs222 project in Common Lisp.
 
 * Progress
 
-- [X] Phase 1
-- [ ] Phase 2
-- [ ] Phase 3
-- [ ] Phase 4
+- [X] Phase 1 - Record Management and Buffering
+- [X] Phase 2 - Indexing
+- [ ] Phase 3 - Relational Operators
+ - Finished filter
+- [ ] Phase 4 - Query Optimization
 
 See description of phases at [[https://grape.ics.uci.edu/wiki/asterix/wiki/cs222-2010-winter-SimpleDBProjectInfo][CS222 Project Page]].
 
