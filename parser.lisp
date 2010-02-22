@@ -1,3 +1,5 @@
+(in-package :simpledb)
+
 #+asdf(eval-when (:compile-toplevel :execute :load-toplevel)
         (asdf:oos 'asdf:load-op :fucc-parser))
 #+asdf(eval-when (:compile-toplevel :execute)
@@ -101,9 +103,8 @@
    (calc-lexer list)
    *query-parser*))
 
-
-(test-sql (copy-list 
-           '(select name #\, id #\, info #\. salary from emp #\, info where id <= 2 #\; 
-             delete from emp where id = 2 and #\( id <= 2 or id >= 0 #\) and id = 1 #\;
-             select id from emp where emp #\. name = "mike" #\;
-             select id from emp)))
+;; (test-sql (copy-list 
+;;            '(select name #\, id #\, info #\. salary from emp #\, info where id <= 2 #\; 
+;;              delete from emp where id = 2 and #\( id <= 2 or id >= 0 #\) and id = 1 #\;
+;;              select id from emp where emp #\. name = "mike" #\;
+;;              select id from emp)))

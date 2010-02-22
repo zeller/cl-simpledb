@@ -21,12 +21,14 @@ See description of phases at [[https://grape.ics.uci.edu/wiki/asterix/wiki/cs222
 
 ** Prerequisites
 
-=sbcl= including =flexi-streams= and =cl-ppcre=.
+=sbcl= including =flexi-streams=, =fucc=, and =cl-ppcre=.
+=autoconf=.
 
-To install the prerequisites, first install =sbcl=.
+To install the prerequisites, first
 
 #+BEGIN_SRC sh
 sudo apt-get install sbcl
+sudo apt-get install autoconf
 #+END_SRC
 
 Start up =sbcl= as =root=.
@@ -35,7 +37,7 @@ Start up =sbcl= as =root=.
 sudo sbcl
 #+END_SRC
 
-and enter the following code to get =flexi-streams= and =cl-ppcre=:
+and enter the following code to get =flexi-streams=, =fucc=, and =cl-ppcre=:
 
 #+BEGIN_SRC lisp
 (require 'asdf-install)
@@ -44,6 +46,7 @@ and enter the following code to get =flexi-streams= and =cl-ppcre=:
 ;; ignore any GPG signature warnings
 (asdf-install:install 'flexi-streams) ;; in-memory binary streams
 (asdf-install:install 'cl-ppcre)      ;; pearl regular expressions
+(asdf-install:install 'fucc)          ;; macro for parsing
 #+END_SRC
 
 Additionally, I highly recommended SLIME for Emacs, although it is not
@@ -56,20 +59,32 @@ sudo apt-get install slime
 ** Compile
 
 #+BEGIN_SRC sh
-./compile.lisp
+autoconf 
 #+END_SRC
 
 This will create the binary =simpledb=.
 
 * Usage
 
-Use the provided =test.txt= file to create an example database file,
+Use the provided =data/test.txt= file to create an example database file,
 add and remove a few tuples, and dump the output to *standard-output*.
 
 #+BEGIN_SRC sh
-./simpledb test int,int
-./simpledb test string,string
-./simpledb test int,string
-./simpledb test string,int
+./simpledb data/test int,int
+./simpledb data/test string,string
+./simpledb data/test int,string
+./simpledb data/test string,int
 #+END_SRC
 
+* Implemented SQL EBNF
+
+The following grammar is currently implemented:
+
+#+BEGIN_EXAMPLE
+SELECT fields
+FROM tables
+[WHERE where-clause]
+
+DELETE FROM table 
+[WHERE where-clause]
+#+END_EXAMPLE

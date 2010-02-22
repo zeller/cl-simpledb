@@ -1,0 +1,33 @@
+LISP=@LISP_PROGRAM@
+
+sbcl_BUILDOPTS=--load ./make-image.lisp
+
+datarootdir = @datarootdir@
+prefix=@prefix@
+exec_prefix= @exec_prefix@
+bindir=@bindir@
+infodir=@infodir@
+
+# You shouldn't have to edit past this
+
+# This is copied from the .asd file. It'd be nice to have the list in
+# one place, but oh well.
+FILES=package.lisp parser.lisp file.lisp utils.lisp parameters.lisp	\
+catalog.lisp bufferpool.lisp simpledb.lisp
+
+all: simpledb
+
+simpledb: $(FILES)
+	$(LISP) $(@LISP@_BUILDOPTS)
+
+clean:
+	rm -f *.fasl *.fas *.lib *.*fsl simpledb
+
+install: simpledb
+	test -z "$(destdir)$(bindir)" || mkdir -p "$(destdir)$(bindir)"
+	install -m 755 simpledb "$(destdir)$(bindir)"
+
+uninstall:
+	rm "$(destdir)$(bindir)/simpledb"
+
+# End of file
