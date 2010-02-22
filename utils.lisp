@@ -18,7 +18,7 @@
                        (case type
                          ('int (parse-integer string-data))
                          ('string string-data)
-                         (otherwise (format t "not good: ~S ~S~%" string-data type))))
+                         (otherwise nil)))
                    (cl-ppcre:split "," line)
                    type-descriptor))))
 

@@ -100,7 +100,13 @@ simpledb test int,string
   (let ((input-file-name (concatenate 'string (nth 1 sb-ext:*posix-argv*) ".txt"))
         (output-file-name (concatenate 'string (nth 1 sb-ext:*posix-argv*) ".dat"))
         (index-file-name (concatenate 'string (nth 1 sb-ext:*posix-argv*) ".idx"))
-        (type-descriptor (mapcar 'read-from-string (cl-ppcre:split "," (nth 2 sb-ext:*posix-argv*))))
+        (type-descriptor (map 'list 
+                              #'(lambda (type)
+                                 (cond
+                                   ((string= "int" type) 'int)
+                                   ((string= "string" type) 'string)
+                                   (t nil)))
+                              (cl-ppcre:split "," (nth 2 sb-ext:*posix-argv*))))
         heap-file index-file)
     
     ;; echo parsed command-line arguments
