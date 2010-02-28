@@ -6,14 +6,14 @@
         (asdf:oos 'asdf:load-op :fucc-generator))
 
 (fucc:defparser *query-parser* s
-  (= < > <= >= :semicolon :id :const 
+  (= < > <= >= :semicolon :id :const :asterisk
      :comma :period
      select delete from where
      or and :lparen :rparen)
   ((s ->
       (:var query-list (:list query :semicolon))
       (:maybe :semicolon)
-      (:do (format t "Value: ~S~%" query-list)))
+      (:do query-list))
    
    (query -> (:or select-query
                   delete-query))
@@ -63,14 +63,17 @@
            (:do (list field)))
 
    (field ->
-          (:var table :id) :period (:var field :id)
-          (:do (cons table field))
+          :id :period (:or :id :asterisk)
+          (:call (lambda (table op field) (cons table field)))
           ->
-          (:var field :id)))
+          (:var field :id)
+          ->
+          :asterisk
+          (:do (list :asterisk))))
   :prec-info
   ((:right or and)))
 
-(defun calc-lexer (list)
+(defun simpledb-lexer (list)
   "Return lexical analizer for list of tokens"
   (lambda ()
     (let ((next-value (pop list)))
@@ -87,6 +90,8 @@
          (values :rparen :rparen))
         ((member next-value '(:period #\.))
          (values :period :period))
+        ((member next-value '(:asterisk #\*))
+         (values :asterisk :asterisk))
         ((member next-value '(select delete from where = < > <= >= or and))
          (values next-value next-value))
         ((symbolp next-value)
@@ -100,7 +105,7 @@
 
 (defun test-sql (list)
   (fucc:parser-lr
-   (calc-lexer list)
+   (simpledb-lexer list)
    *query-parser*))
 
 ;; (test-sql (copy-list 

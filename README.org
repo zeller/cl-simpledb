@@ -12,7 +12,6 @@ phases of the cs222 project in Common Lisp.
 - [X] Phase 1 - Record Management and Buffering
 - [X] Phase 2 - Indexing
 - [ ] Phase 3 - Relational Operators
- - Finished filter
 - [ ] Phase 4 - Query Optimization
 
 See description of phases at [[https://grape.ics.uci.edu/wiki/asterix/wiki/cs222-2010-winter-SimpleDBProjectInfo][CS222 Project Page]].
@@ -59,24 +58,51 @@ sudo apt-get install slime
 ** Compile
 
 #+BEGIN_SRC sh
-autoconf 
+autoconf && ./configure && make
 #+END_SRC
 
 This will create the binary =simpledb=.
 
 * Usage
 
-Use the provided =data/test.txt= file to create an example database file,
-add and remove a few tuples, and dump the output to *standard-output*.
+Use the provided =data/first.txt= and =data/last.txt= files to create
+an example database file, then start the SQL parser.
 
 #+BEGIN_SRC sh
-./simpledb data/test int,int
-./simpledb data/test string,string
-./simpledb data/test int,string
-./simpledb data/test string,int
+./simpledb convert data/first.txt int,string
+./simpledb convert data/last.txt string,int
+#+END_SRC sh
+
+Now you can start the SQL parser using the following =data/schema.txt=:
+
+#+BEGIN_EXAMPLE
+first
+(
+id int,
+name string
+);
+
+last
+(
+name string,
+id int
+);
+#+END_EXAMPLE
+
+#+BEGIN_SRC sh
+./simpledb parser data/schema.txt
 #+END_SRC
 
-* Implemented SQL EBNF
+From here, you can perform SQL queries on the database, such as the
+following.
+
+#+BEGIN_EXAMPLE
+> SELECT first.name, last.name FROM first,last WHERE first.id = last.id;
+"Michael","Zeller"
+> 
+#+END_EXAMPLE
+
+* Implemented SQL
 
 The following grammar is currently implemented:
 
@@ -85,6 +111,6 @@ SELECT fields
 FROM tables
 [WHERE where-clause]
 
-DELETE FROM table 
-[WHERE where-clause]
+DELETE FROM table
+WHERE where-clause
 #+END_EXAMPLE
