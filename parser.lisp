@@ -15,8 +15,9 @@
       (:maybe :semicolon)
       (:do query-list))
    
-   (query -> (:or select-query
-                  delete-query))
+   (query -> 
+          (:or select-query
+               delete-query))
    
    (select-query ->
                  select (:var fields fields) 
@@ -38,11 +39,19 @@
            :lparen (:var clause clause) :rparen
            (:do clause)
            ->
-           clause (:or or and) clause
+           clause0 (:or or and) clause
            (:call (lambda (a op b) (list op a b)))
            ->
-           field (:or = < > <= >=) :const
-           (:call (lambda (field op value) (list op field value))))
+           clause0)
+
+   (clause0 ->
+            field (:or = < > <= >=) value
+            (:call (lambda (field op value) (list op field value))))
+
+   (value ->
+          field
+          ->
+          :const)
 
    (tables ->
            (:var table :id) :comma (:var tables tables)
@@ -63,15 +72,40 @@
            (:do (list field)))
 
    (field ->
-          :id :period (:or :id :asterisk)
+          table :period (:or :id :asterisk)
           (:call (lambda (table op field) (cons table field)))
           ->
-          (:var field :id)
-          ->
-          :asterisk
-          (:do (list :asterisk))))
+          (:or :id :asterisk)))
   :prec-info
   ((:right or and)))
+
+(fucc:defparser *schema-parser* s
+  (:id
+   string int
+   :comma :semicolon
+   :lparen :rparen)
+  ((s ->
+      (:var table-list (:list table :semicolon))
+      (:maybe :semicolon)
+      (:do table-list))
+   
+   (table ->
+          (:var table :id)
+          :lparen
+          (:var fields fields)
+          :rparen
+          (:do (list table fields)))
+
+   (fields ->
+           (:var field field) :comma (:var fields fields)
+           (:do (push field fields))
+           ->
+           (:var field field)
+           (:do (list field)))
+
+   (field ->
+          :id (:or int string)
+          (:call (lambda (name type) (cons name type))))))
 
 (defun simpledb-lexer (list)
   "Return lexical analizer for list of tokens"
@@ -92,7 +126,7 @@
          (values :period :period))
         ((member next-value '(:asterisk #\*))
          (values :asterisk :asterisk))
-        ((member next-value '(select delete from where = < > <= >= or and))
+        ((member next-value '(select delete from where = < > <= >= or and int string))
          (values next-value next-value))
         ((symbolp next-value)
          (values :id next-value))
@@ -103,10 +137,10 @@
         (t
          (error "Unknown token: ~S" next-value))))))
 
-(defun test-sql (list)
-  (fucc:parser-lr
-   (simpledb-lexer list)
-   *query-parser*))
+;; (defun test-sql (list)
+;;   (fucc:parser-lr
+;;    (simpledb-lexer list)
+;;    *query-parser*))
 
 ;; (test-sql (copy-list 
 ;;            '(select name #\, id #\, info #\. salary from emp #\, info where id <= 2 #\; 

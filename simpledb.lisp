@@ -209,7 +209,7 @@ simpledb parser data/schema.txt
      (let ((c (read-char stream nil nil)))
        (cond
          ((member c '(#\Space #\Tab)))
-         ((member c '(nil #\Newline)) (return-from lexer nil))
+         ((member c '(nil #\Newline)) (return-from lexer c))
          ((member c '(#\, #\. #\; #\( #\) #\*))
           (return-from lexer c))
          ((member c '(#\< #\> #\=))
@@ -306,17 +306,37 @@ simpledb parser data/schema.txt
            (return-from read-number v))
          (setf v (+ (* (or v 0) 10) (- (char-code c) (char-code #\0))))))))
 
-(defun lex ()
+(defun lex (&optional (newlines? nil))
   (let ((e '()))
     (loop 
        (let ((symbol (lexer)))
-         (when (null symbol)
+         (when (or (null symbol)
+                   (and (not newlines?) (eq #\Newline symbol)))
            (return-from lex (nreverse e)))
-         (push symbol e)))))
+         (when (not (eq #\Newline symbol))
+           (push symbol e))))))
+
+(defun parse-schema (schema-file-name)
+  (with-open-file (*standard-input* schema-file-name)
+    (let ((expression (lex t)))
+      (write-debug "~A~%" expression)
+      (let ((abstract-syntax-tree
+             (fucc:parser-lr (simpledb-lexer expression) *schema-parser*)))
+        (format t "Loaded schema: ~A~%" abstract-syntax-tree)
+        (loop for table = (pop abstract-syntax-tree)
+           do 
+             (write-debug "~A~%" table)
+             ;; do something here with the table
+             (let ((name (first table))
+                   (fields (second table)))
+               (write-debug "Loading table ~a~%" name)
+               (write-debug "With fields table ~a~%" fields)
+               (write-debug "Type descriptor ~a~%" (mapcar #'cdr fields)))
+           while abstract-syntax-tree)))))
 
 (defun parser (schema-file-name)
   ;; 1. parse schema file and read tables and indexes
-  ;; @todo
+  (parse-schema schema-file-name)
 
   ;; 2. REPL for SQL from *standard-input*
   (format t "Type a SQL query, or an empty line to quit.~%")
