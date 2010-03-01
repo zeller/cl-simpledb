@@ -3,7 +3,7 @@
 ;;** some helper functions
 
 (defmacro write-debug (&rest args)
-  (if t ;; set to t or nil to toggle debugging information output
+  (if nil ;; set to t or nil to toggle debugging information output
       `(format t ,@args)))
 
 ;;** some utility methods

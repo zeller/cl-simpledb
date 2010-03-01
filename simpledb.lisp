@@ -94,98 +94,29 @@ simpledb parser data/schema.txt
 
 ")
 
-;; used to convert a string tuple to any combination of int or string tuples
-;; as long as the string-tuple is all strings of integers
-(defun convert-tuple (string-tuple type-descriptor)
-  (mapcar #'(lambda (type data) 
-              (case type 
-                ('int (parse-integer data))
-                ('string data)
-                (otherwise nil)))
-          type-descriptor string-tuple))
-
 (defun convert (input-file-name output-file-name index-file-name type-descriptor)
-  (let (heap-file index-file)
+  ;; create a heap-file on disk from <input-file-name> in <output-file-name>
+  (heap-file-encoder input-file-name output-file-name type-descriptor)
     
-    ;; echo parsed command-line arguments
-    (write-debug 
-     "<input-file-name> : ~a~%<output-file-name> : ~a~%<index-file-name> : ~a~%<type-descriptor> : ~a~%"
-     input-file-name output-file-name index-file-name type-descriptor)
+  ;; reread the heap-file from disk, create index-file from heap-file
+  (write-debug "Reading heap file from disk.~%")    
+  (let ((heap-file (make-instance 'heap-file
+                                  :file-name output-file-name 
+                                  :type-descriptor type-descriptor)))
     
-    ;; create a heap-file on disk from <input-file-name> in <output-file-name>
-    (heap-file-encoder input-file-name output-file-name type-descriptor)
-    
-    ;; reread the heap-file from disk, create index-file from heap-file
-    (write-debug "Reading heap file from disk.~%")
-    
-    (setf heap-file (make-instance 'heap-file
-                                   :file-name output-file-name 
-                                   :type-descriptor type-descriptor))
-    
-    ;; print the contents of the files 
-    ;; note: (index-file never touches it's own pages)
+    ;; print the contents of the file
     (write-debug "Printing heap file.~%")
-    (write-debug "~a ~a ~a ~a~%" *max-int-size* *int-size* *page-offset-size* *offset-size*)
     (print-file heap-file)
     
-    (setf index-file (make-instance 'index-file
-                                    :file-name index-file-name
-                                    :source-file heap-file
-                                    :key-field 0
-                                    :new? t))
-    
+    (write-debug "Building index file.~%")
+    (make-instance 'index-file
+                   :file-name index-file-name
+                   :source-file heap-file
+                   :key-field 0
+                   :new? t)
+
     ;; force index-file to disk
-    (clear-bufferpool)
-    
-    (write-debug "Printing index file.~%")
-    (print-file index-file)
-    
-    (let ((value (first (convert-tuple '("7") (list (first type-descriptor))))))
-      (filter index-file (make-instance 'filter :op '= :field 0 :value value) #'print-tuple)
-      (filter index-file (make-instance 'filter :op '<= :field 0 :value value) #'print-tuple))
-    
-    ;; delete a few tuples, and add a few tuples
-    (write-debug "Deleting tuples.~%")
-    (delete-tuple heap-file (convert-tuple '("1" "2") type-descriptor))
-    (delete-tuple heap-file (convert-tuple '("3" "4") type-descriptor))
-    (delete-tuple heap-file (convert-tuple '("5" "6") type-descriptor))
-    (write-debug "Adding tuples.~%")
-    (let ((tuple (convert-tuple '("200" "200") type-descriptor)))
-      (loop repeat 10 do (add-tuple heap-file tuple)))
-    
-    ;; force back to disk
-    (write-debug "Dumping back to disk.~%")
-    (clear-bufferpool)
-    
-    ;; perform an index search to check that we only use the pages in a single bin
-    ;; and that we fetch a single page from heap-file
-    (let ((value (first (convert-tuple '("15") (list (first type-descriptor))))))
-      (write-debug "Performing index search.~%")
-      (filter index-file (make-instance 'filter :op '= :field 0 :value value) #'print-tuple)
-      (write-debug "Performing scan using index.~%")
-      (filter index-file (make-instance 'filter :op '< :field 0 :value value) #'print-tuple))
-    
-    ;; perform a delete on the heap-file, this should also update any indexes
-    (write-debug "Deleting all added tuples.")
-    (let ((tuple (convert-tuple '("200" "200") type-descriptor)))
-      (delete-tuple heap-file tuple))
-    
-    ;; force to disk
-    (clear-bufferpool)
-    
-    ;; finally, reread from disk, print contents and flush back to disk
-    ;; note: no pages should be written to disk in this process
-    (write-debug "Reading heap file from disk.~%")
-    (let ((heap-file (make-instance 'heap-file
-                                    :file-name output-file-name 
-                                    :type-descriptor type-descriptor)))
-      (print-file heap-file)
-      (write-debug "Reading index file from disk.~%")
-      (print-file (make-instance 'index-file
-                                 :file-name index-file-name
-                                 :source-file heap-file
-                                 :key-field 0))
-      (clear-bufferpool))))
+    (clear-bufferpool)))
  
 (defun parse-type-descriptor (type-descriptor-string)
   (map 'list
@@ -195,12 +126,6 @@ simpledb parser data/schema.txt
              ((string= "string" type) 'string)
              (t nil)))
        (cl-ppcre:split "," type-descriptor-string)))
-
-(defun change-file-type (input-file-name file-type)
-  (concatenate 'string 
-               (subseq input-file-name 0
-                       (position #\. input-file-name :test #'char=))
-               file-type))
 
 ;; read standard-input into a list of symbols
 ;; pass back the symbols or nil if quitting
@@ -243,11 +168,16 @@ simpledb parser data/schema.txt
            ('select 
             (write-debug "SELECT STATEMENT~%")
             (let ((fields (second query))
-                  (tables (third query))
+                  (tables (mapcar 
+                           #'(lambda (table) 
+                               (list table (catalog-lookup-table-number (string table))))
+                           (third query)))
                   (where-clause (fifth query)))
               (write-debug "Fields: ~A~%" fields)
               (write-debug "Tables: ~A~%" tables)
-              (write-debug "Where: ~A~%" where-clause))))
+              (write-debug "Where: ~A~%" where-clause)
+              (loop for (table-name table-number) in tables 
+                 do (print-file (catalog-lookup-file table-number))))))
        while abstract-syntax-tree)))
 
 (defun maybe-unread (char stream)
@@ -318,7 +248,9 @@ simpledb parser data/schema.txt
 
 (defun parse-schema (schema-file-name)
   (with-open-file (*standard-input* schema-file-name)
-    (let ((expression (lex t)))
+    (let ((schema-dir-name (subseq schema-file-name 
+                                   0 (+ (position #\/ schema-file-name :from-end t) 1)))
+          (expression (lex t)))
       (write-debug "~A~%" expression)
       (let ((abstract-syntax-tree
              (fucc:parser-lr (simpledb-lexer expression) *schema-parser*)))
@@ -326,12 +258,27 @@ simpledb parser data/schema.txt
         (loop for table = (pop abstract-syntax-tree)
            do 
              (write-debug "~A~%" table)
-             ;; do something here with the table
-             (let ((name (first table))
-                   (fields (second table)))
-               (write-debug "Loading table ~a~%" name)
-               (write-debug "With fields table ~a~%" fields)
-               (write-debug "Type descriptor ~a~%" (mapcar #'cdr fields)))
+             (let* ((table-name (string (first table)))
+                    (fields (second table))
+                    (column-names (mapcar #'string (mapcar #'car fields)))
+                    (type-descriptor (mapcar #'cdr fields))
+                    (heap-file-name (concatenate 'string schema-dir-name table-name ".dat"))
+                    (index-file-name (concatenate 'string schema-dir-name table-name ".idx")))
+               (write-debug "Loading table ~a~%" table-name)
+               (write-debug "Reading heap file from disk (~a).~%" heap-file-name)
+               (write-debug "Reading index file from disk (~a).~%" index-file-name)
+               (let* ((heap-file (make-instance 'heap-file
+                                                :file-name heap-file-name
+                                                :type-descriptor type-descriptor))
+                      (index-file (make-instance 'index-file
+                                                 :file-name index-file-name
+                                                 :source-file heap-file
+                                                 :key-field 0))
+                      (table-info (make-instance 'table-info
+                                                 :table-name table-name
+                                                 :column-names column-names)))
+                 (write-debug "Adding the info ~a to the catalog~%" table-info)
+                 (catalog-add-info (sxhash heap-file-name) table-info)))
            while abstract-syntax-tree)))))
 
 (defun parser (schema-file-name)
@@ -347,7 +294,16 @@ simpledb parser data/schema.txt
        (let ((e (lex)))
          (when (null e)
            (return-from parser))
-         (format t " => ~A~%" (evaluate e))))))
+         (evaluate e)))))
+
+(defun change-file-type (input-file-name file-type)
+  (let ((input-dir-name-end (position #\/ input-file-name :from-end t))
+        (input-file-name-end (position #\. input-file-name :from-end t :test #'char=)))
+    (when input-dir-name-end
+      (let ((input-dir (subseq input-file-name 0 input-dir-name-end))
+            (input-file (string-upcase (subseq input-file-name (+ input-dir-name-end 1)))))
+        (setf input-file-name (format nil "~a/~a" input-dir input-file))))
+    (concatenate 'string (subseq input-file-name 0 input-file-name-end) file-type)))
 
 (defun simpledb ()
   ;;** command-line arguments

@@ -13,14 +13,11 @@
 (defclass catalog ()
   ((table-file :initform (make-hash-table) :accessor table-file)
    (table-indexes :initform (make-hash-table) :accessor table-indexes)
-   (table-info :initform (make-hash-table) :accessor table-info)))
+   (table-info :initform (make-hash-table) :accessor table-info)
+   (table-numbers :initform (make-hash-table) :accessor table-numbers)))
 
 (defun clear-catalog ()
   (setf *catalog* (make-instance 'catalog)))
-
-;; info methods
-
-;; @todo add methods for setting and getting the info (names) of a table
 
 ;; file methods
 
@@ -32,6 +29,21 @@
 
 (defmethod catalog-add-file (table-number (file file))
   (setf (gethash table-number (table-file *catalog*)) file))
+
+(defun catalog-lookup-table-number (table-name)
+  (gethash table-name (table-numbers *catalog*)))
+
+;; info methods
+
+(defgeneric catalog-add-info (table-number info)
+  (:documentation "Adds information about a file to the catalog."))
+
+(defun catalog-lookup-info (table-number)
+  (gethash table-number (table-info *catalog*)))
+
+(defmethod catalog-add-info (table-number (info table-info))
+  (setf (gethash table-number (table-info *catalog*)) info)
+  (setf (gethash (table-name info) (table-numbers *catalog*)) table-number))
 
 ;; indexing methods
 

@@ -1,0 +1,11 @@
+first
+(
+id int,
+name string
+);
+
+last
+(
+name string,
+id int
+);
