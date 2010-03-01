@@ -30,8 +30,14 @@
 (defmethod catalog-add-file (table-number (file file))
   (setf (gethash table-number (table-file *catalog*)) file))
 
+(define-condition table-does-not-exist-error (error)
+  ((name :initarg :name :reader name)))
+
 (defun catalog-lookup-table-number (table-name)
-  (gethash table-name (table-numbers *catalog*)))
+  (let ((table-number (gethash table-name (table-numbers *catalog*))))
+    (if (null table-number)
+        (error 'table-does-not-exist-error :name table-name)
+        table-number)))
 
 ;; info methods
 

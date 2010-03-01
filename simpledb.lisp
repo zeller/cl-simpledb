@@ -150,7 +150,10 @@ simpledb parser data/schema.txt
           (unread-char c stream)
           (return-from lexer (read-id stream)))
          (t
-          (error c))))))
+          nil)))))
+
+(defun reorder (list-of-items order)
+  (mapcar #'(lambda (pos) (nth pos list-of-items)) order))
 
 (defun evaluate (expression)
   (let ((abstract-syntax-tree
@@ -168,16 +171,29 @@ simpledb parser data/schema.txt
            ('select 
             (write-debug "SELECT STATEMENT~%")
             (let ((fields (second query))
-                  (tables (mapcar 
+                  (tables (mapcar
                            #'(lambda (table) 
-                               (list table (catalog-lookup-table-number (string table))))
+                               (cons (string table)
+                                     (catalog-lookup-table-number (string table))))
                            (third query)))
                   (where-clause (fifth query)))
-              (write-debug "Fields: ~A~%" fields)
-              (write-debug "Tables: ~A~%" tables)
-              (write-debug "Where: ~A~%" where-clause)
-              (loop for (table-name table-number) in tables 
-                 do (print-file (catalog-lookup-file table-number))))))
+              (write-debug "Fields: ~S~%" fields)
+              (write-debug "Tables: ~S~%" tables)
+              (write-debug "Where: ~S~%" where-clause)
+              (loop for (table-name . table-number) in tables
+                 do (let* ((file (catalog-lookup-file table-number))
+                           (info (catalog-lookup-info table-number))
+                           (column-names (column-names info)))
+                      (write-debug "Table info: ~S~%" (column-names info))
+                      (filter file nil
+                              #'(lambda (tuple type-descriptor record-id)
+                                  ;; print only the valid rows and columns
+                                  (if (eq :asterisk fields)
+                                      (print-tuple tuple type-descriptor nil)
+                                      (let ((order (mapcar
+                                                    #'(lambda (field)
+                                                        (position field column-names :test #'string=)) fields)))
+                                        (print-tuple (reorder tuple order) (reorder type-descriptor order) nil))))))))))
        while abstract-syntax-tree)))
 
 (defun maybe-unread (char stream)
@@ -185,8 +201,6 @@ simpledb parser data/schema.txt
     (unread-char char stream)))
 
 (defun intern-id (string)
-  ;; I'd really like to say (intern (string-upcase string) '#.*package*),
-  ;; but that breaks Allegro's case hacks.
   (let ((*package* '#.*package*))
     (read-from-string string)))
 
@@ -283,7 +297,14 @@ simpledb parser data/schema.txt
 
 (defun parser (schema-file-name)
   ;; 1. parse schema file and read tables and indexes
-  (parse-schema schema-file-name)
+  (handler-case
+      (parse-schema schema-file-name)
+    (sb-int:simple-file-error ()
+      (format t "abort: schema file does not exist~%")
+      (return-from parser))
+    (error ()
+      (format t "abort: could not load schema~%")
+      (return-from parser)))
 
   ;; 2. REPL for SQL from *standard-input*
   (format t "Type a SQL query, or an empty line to quit.~%")
@@ -291,10 +312,15 @@ simpledb parser data/schema.txt
      (with-simple-restart (abort "Return to simpledb toplevel.")
        (format t "> ")
        (finish-output *standard-output*)
-       (let ((e (lex)))
-         (when (null e)
-           (return-from parser))
-         (evaluate e)))))
+       (handler-case 
+           (let ((e (lex)))
+             (when (null e)
+               (return-from parser))
+             (evaluate e))
+         (fucc:lr-parse-error-condition ()
+           (format t "error: SQL malformed~%"))
+         (table-does-not-exist-error (e)
+           (format t "error: table (~a) does not exist~%" (name e)))))))
 
 (defun change-file-type (input-file-name file-type)
   (let ((input-dir-name-end (position #\/ input-file-name :from-end t))
@@ -329,5 +355,3 @@ simpledb parser data/schema.txt
       (t
        (format t *usage-string*)
        (return-from simpledb 1)))))
-
-  

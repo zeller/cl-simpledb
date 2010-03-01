@@ -20,8 +20,8 @@
                delete-query))
    
    (select-query ->
-                 select (:var fields fields) 
-                 from (:var tables tables) 
+                 select (:var fields (:or :asterisk fields))
+                 from (:var tables tables)
                  (:var where (:maybe where-statement))
                  (:do `(select ,fields ,tables ,@where)))
 
@@ -75,7 +75,7 @@
           table :period (:or :id :asterisk)
           (:call (lambda (table op field) (cons table field)))
           ->
-          (:or :id :asterisk)))
+          :id))
   :prec-info
   ((:right or and)))
 
