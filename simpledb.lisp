@@ -14,17 +14,11 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
 
 ;; - Add unit tests
 
-;; - Add conditions/errors on bad input
-
-;; - Package code
-
 ;; - Keep tuples sorted on page (only tiny overhead when
 ;;   inserting/deleting)
 
 ;; - Fix table ids, currently they are not completely unique (based on
 ;;   filename)
-
-;; - Add table name and column name information to the catalog
 
 ;; - Create a reader for getting the table-number for a file from the
 ;;   file-name, this should encapsulate sxhash, and I can easily try
@@ -52,6 +46,13 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
 ;;   as a parameter.
 
 ;; - Implement Filter as an 'interator' rather than a callback.
+
+;; - Implement Join (as a cross-product, ignore WHERE) but keep in
+;;   mind that an equality predicate will eventually need to be used
+;;   to implement HashJoin. 
+;;
+;;    - SELECT first.name, last.name FROM first,last
+;;    - SELECT first.name, last.name FROM first,last WHERE first.id=last.id
 
 ;;* Ideas
 
