@@ -137,13 +137,73 @@
         (t
          (error "Unknown token: ~S" next-value))))))
 
-;; (defun test-sql (list)
-;;   (fucc:parser-lr
-;;    (simpledb-lexer list)
-;;    *query-parser*))
+(defun evaluate (expression)
+  (let ((abstract-syntax-tree
+         (fucc:parser-lr (simpledb-lexer expression) *query-parser*)))
+    (loop for query = (pop abstract-syntax-tree)
+       do 
+         (write-debug "~A~%" query)
+         (case (first query)
+           ('delete 
+            (write-debug "DELETE STATEMENT~%")
+            (let ((table (second query))
+                  (where-clause (fourth query)))
+              (write-debug "Table: ~A~%" table)
+              (write-debug "Where: ~A~%" where-clause))
+            (error 'unsupported-feature-error :name "DELETE"))
+           ('select 
+            (write-debug "SELECT STATEMENT~%")
+            (let ((fields (second query))
+                  (tables (mapcar
+                           #'(lambda (table) 
+                               (cons (string table)
+                                     (catalog-lookup-table-number table)))
+                           (third query)))
+                  (where-clause (fifth query)))
+              (write-debug "Fields: ~S~%" fields)
+              (write-debug "Tables: ~S~%" tables)
+              (write-debug "Where: ~S~%" where-clause)
+              (when where-clause
+                (error 'unsupported-feature-error :name "WHERE"))
+              (let ((cursor (projection (join tables) fields)))
+                (format t "Header: ~S~%" (cursor-info cursor))
+                (cursor-open cursor)
+                (loop until (cursor-finished-p cursor)
+                   for tuple = (cursor-next cursor)
+                   do (print-tuple tuple (cursor-type-descriptor cursor)))))))
+       while abstract-syntax-tree)))
 
-;; (test-sql (copy-list 
-;;            '(select name #\, id #\, info #\. salary from emp #\, info where id <= 2 #\; 
-;;              delete from emp where id = 2 and #\( id <= 2 or id >= 0 #\) and id = 1 #\;
-;;              select id from emp where emp #\. name = "mike" #\;
-;;              select id from emp)))
+(defun parse-schema (schema-file-name)
+  (with-open-file (*standard-input* schema-file-name)
+    (let ((schema-dir-name (subseq schema-file-name 
+                                   0 (+ (position #\/ schema-file-name :from-end t) 1)))
+          (expression (lex t)))
+      (write-debug "~A~%" expression)
+      (let ((abstract-syntax-tree
+             (fucc:parser-lr (simpledb-lexer expression) *schema-parser*)))
+        (format t "Loaded schema: ~A~%" abstract-syntax-tree)
+        (loop for table = (pop abstract-syntax-tree)
+           do 
+             (write-debug "~A~%" table)
+             (let* ((table-name (first table))
+                    (fields (second table))
+                    (column-names (mapcar #'car fields))
+                    (type-descriptor (mapcar #'cdr fields))
+                    (heap-file-name (concatenate 'string schema-dir-name (string table-name) ".dat"))
+                    (index-file-name (concatenate 'string schema-dir-name (string table-name) ".idx")))
+               (write-debug "Loading table ~a~%" table-name)
+               (write-debug "Reading heap file from disk (~a).~%" heap-file-name)
+               (write-debug "Reading index file from disk (~a).~%" index-file-name)
+               (let* ((heap-file (make-instance 'heap-file
+                                                :file-name heap-file-name
+                                                :type-descriptor type-descriptor))
+                      (index-file (make-instance 'index-file
+                                                 :file-name index-file-name
+                                                 :source-file heap-file
+                                                 :key-field 0))
+                      (table-info (make-instance 'table-info
+                                                 :table-name table-name
+                                                 :column-names column-names)))
+                 (write-debug "Adding the info ~a to the catalog~%" table-info)
+                 (catalog-add-info (sxhash heap-file-name) table-info)))
+           while abstract-syntax-tree)))))

@@ -12,8 +12,8 @@ infodir=@infodir@
 
 # This is copied from the .asd file. It'd be nice to have the list in
 # one place, but oh well.
-FILES=package.lisp parser.lisp file.lisp utils.lisp parameters.lisp	\
-catalog.lisp bufferpool.lisp simpledb.lisp
+FILES=package.lisp lexer.lisp parser.lisp cursor.lisp file.lisp		\
+utils.lisp parameters.lisp catalog.lisp bufferpool.lisp simpledb.lisp
 
 all: simpledb
 

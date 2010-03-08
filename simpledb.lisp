@@ -14,11 +14,24 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
 
 ;; - Add unit tests
 
+;; - Support aliases in SELECT
+
 ;; - Keep tuples sorted on page (only tiny overhead when
 ;;   inserting/deleting)
 
 ;; - Fix table ids, currently they are not completely unique (based on
 ;;   filename)
+
+;; - Support WHERE clauses using the filter
+
+;; - Push projections deeper once a query optimizer is implemented.
+
+;; - Need to look at index-files, made some breaking changes. For
+;;   instance, a cursor is needed for searching a index instead of the
+;;   previous callback method. The initialize-instance for index-file
+;;   also requires the record-id of the tuple from the cursor, which
+;;   is not currently supported. See cursor.lisp:filter and
+;;   file.lisp:index-file
 
 ;; - Create a reader for getting the table-number for a file from the
 ;;   file-name, this should encapsulate sxhash, and I can easily try
@@ -45,15 +58,6 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
 ;;   store arbitrary precision numbers. Currently the max INT is set
 ;;   as a parameter.
 
-;; - Implement Filter as an 'interator' rather than a callback.
-
-;; - Implement Join (as a cross-product, ignore WHERE) but keep in
-;;   mind that an equality predicate will eventually need to be used
-;;   to implement HashJoin. 
-;;
-;;    - SELECT first.name, last.name FROM first,last
-;;    - SELECT first.name, last.name FROM first,last WHERE first.id=last.id
-
 ;;* Ideas
 
 ;; - Can I remove sxhash and just hash the file object itself?
@@ -66,8 +70,6 @@ exec sbcl --noinform --load $0 --end-toplevel-options "$@"
 (in-package :simpledb)
 
 (export '(simpledb))
-
-;;** example use case
 
 (defparameter *usage-string*
 "
@@ -118,184 +120,19 @@ simpledb parser data/schema.txt
 
     ;; force index-file to disk
     (clear-bufferpool)))
+
+(define-condition table-does-not-exist-error (error)
+  ((name :initarg :name :reader name)))
+
+(define-condition field-does-not-exist-error (error)
+  ((name :initarg :name :reader name)))
+
+(define-condition unsupported-feature-error (error)
+  ((name :initarg :name :reader name)))
+
+(define-condition ambiguous-field-error (error)
+  ((name :initarg :name :reader name)))
  
-(defun parse-type-descriptor (type-descriptor-string)
-  (map 'list
-       #'(lambda (type)
-           (cond
-             ((string= "int" type) 'int)
-             ((string= "string" type) 'string)
-             (t nil)))
-       (cl-ppcre:split "," type-descriptor-string)))
-
-;; read standard-input into a list of symbols
-;; pass back the symbols or nil if quitting
-(defun lexer (&optional (stream *standard-input*))
-  (loop
-     (let ((c (read-char stream nil nil)))
-       (cond
-         ((member c '(#\Space #\Tab)))
-         ((member c '(nil #\Newline)) (return-from lexer c))
-         ((member c '(#\, #\. #\; #\( #\) #\*))
-          (return-from lexer c))
-         ((member c '(#\< #\> #\=))
-          (unread-char c stream)
-          (return-from lexer (read-operator stream)))
-         ((digit-char-p c)
-          (unread-char c stream)
-          (return-from lexer (read-number stream)))
-         ((char= c #\")
-          (unread-char c stream)
-          (return-from lexer (read-string stream)))
-         ((alpha-char-p c)
-          (unread-char c stream)
-          (return-from lexer (read-id stream)))
-         (t
-          nil)))))
-
-(defun reorder (list-of-items order)
-  (mapcar #'(lambda (pos) (nth pos list-of-items)) order))
-
-(defun evaluate (expression)
-  (let ((abstract-syntax-tree
-         (fucc:parser-lr (simpledb-lexer expression) *query-parser*)))
-    (loop for query = (pop abstract-syntax-tree)
-       do 
-         (write-debug "~A~%" query)
-         (case (first query)
-           ('delete 
-            (write-debug "DELETE STATEMENT~%")
-            (let ((table (second query))
-                  (where-clause (fourth query)))
-              (write-debug "Table: ~A~%" table)
-              (write-debug "Where: ~A~%" where-clause)))
-           ('select 
-            (write-debug "SELECT STATEMENT~%")
-            (let ((fields (second query))
-                  (tables (mapcar
-                           #'(lambda (table) 
-                               (cons (string table)
-                                     (catalog-lookup-table-number (string table))))
-                           (third query)))
-                  (where-clause (fifth query)))
-              (write-debug "Fields: ~S~%" fields)
-              (write-debug "Tables: ~S~%" tables)
-              (write-debug "Where: ~S~%" where-clause)
-              (loop for (table-name . table-number) in tables
-                 do (let* ((file (catalog-lookup-file table-number))
-                           (info (catalog-lookup-info table-number))
-                           (column-names (column-names info)))
-                      (write-debug "Table info: ~S~%" (column-names info))
-                      (filter file nil
-                              #'(lambda (tuple type-descriptor record-id)
-                                  ;; print only the valid rows and columns
-                                  (if (eq :asterisk fields)
-                                      (print-tuple tuple type-descriptor nil)
-                                      (let ((order (mapcar
-                                                    #'(lambda (field)
-                                                        (position field column-names :test #'string=)) fields)))
-                                        (print-tuple (reorder tuple order) (reorder type-descriptor order) nil))))))))))
-       while abstract-syntax-tree)))
-
-(defun maybe-unread (char stream)
-  (when char
-    (unread-char char stream)))
-
-(defun intern-id (string)
-  (let ((*package* '#.*package*))
-    (read-from-string string)))
-
-(defun read-id (stream)
-  (let ((v '()))
-    (loop
-       (let ((c (read-char stream nil nil)))
-         (when (or (null c)
-                   (not (or (digit-char-p c) (alpha-char-p c) (eql c #\_))))
-           (maybe-unread c stream)
-           (when (null v)
-             (lexer-error c))
-           (return-from read-id (intern-id (coerce (nreverse v) 'string))))
-         (push c v)))))
-
-(defun read-string (stream)
-  (let ((v '()))
-    (loop
-       (let ((c (read-char stream nil nil)))
-         (if (eql c #\")
-             (when (not (null v))
-               (return-from read-string (coerce (nreverse v) 'string)))
-             (if (null c)
-                 (lexer-error c)
-                 (push c v)))))))
-
-(defun read-operator (stream)
-  (let ((v '()))
-    (let ((c (read-char stream nil nil)))
-      (cond
-        ((member c '(#\< #\>))
-         (push c v)
-         (let ((c (read-char stream nil nil)))
-           (if (char= c #\=) (push c v) (maybe-unread c stream))))
-        ((member c '(#\=))
-         (push c v))))
-    (return-from read-operator (intern-id (coerce (nreverse v) 'string)))))
-
-(defun read-number (stream)
-  (let ((v nil))
-    (loop
-       (let ((c (read-char stream nil nil)))
-         (when (or (null c) (not (digit-char-p c)))
-           (maybe-unread c stream)
-           (when (null v)
-             (lexer-error c))
-           (return-from read-number v))
-         (setf v (+ (* (or v 0) 10) (- (char-code c) (char-code #\0))))))))
-
-(defun lex (&optional (newlines? nil))
-  (let ((e '()))
-    (loop 
-       (let ((symbol (lexer)))
-         (when (or (null symbol)
-                   (and (not newlines?) (eq #\Newline symbol)))
-           (return-from lex (nreverse e)))
-         (when (not (eq #\Newline symbol))
-           (push symbol e))))))
-
-(defun parse-schema (schema-file-name)
-  (with-open-file (*standard-input* schema-file-name)
-    (let ((schema-dir-name (subseq schema-file-name 
-                                   0 (+ (position #\/ schema-file-name :from-end t) 1)))
-          (expression (lex t)))
-      (write-debug "~A~%" expression)
-      (let ((abstract-syntax-tree
-             (fucc:parser-lr (simpledb-lexer expression) *schema-parser*)))
-        (format t "Loaded schema: ~A~%" abstract-syntax-tree)
-        (loop for table = (pop abstract-syntax-tree)
-           do 
-             (write-debug "~A~%" table)
-             (let* ((table-name (string (first table)))
-                    (fields (second table))
-                    (column-names (mapcar #'string (mapcar #'car fields)))
-                    (type-descriptor (mapcar #'cdr fields))
-                    (heap-file-name (concatenate 'string schema-dir-name table-name ".dat"))
-                    (index-file-name (concatenate 'string schema-dir-name table-name ".idx")))
-               (write-debug "Loading table ~a~%" table-name)
-               (write-debug "Reading heap file from disk (~a).~%" heap-file-name)
-               (write-debug "Reading index file from disk (~a).~%" index-file-name)
-               (let* ((heap-file (make-instance 'heap-file
-                                                :file-name heap-file-name
-                                                :type-descriptor type-descriptor))
-                      (index-file (make-instance 'index-file
-                                                 :file-name index-file-name
-                                                 :source-file heap-file
-                                                 :key-field 0))
-                      (table-info (make-instance 'table-info
-                                                 :table-name table-name
-                                                 :column-names column-names)))
-                 (write-debug "Adding the info ~a to the catalog~%" table-info)
-                 (catalog-add-info (sxhash heap-file-name) table-info)))
-           while abstract-syntax-tree)))))
-
 (defun parser (schema-file-name)
   ;; 1. parse schema file and read tables and indexes
   (handler-case
@@ -320,17 +157,14 @@ simpledb parser data/schema.txt
              (evaluate e))
          (fucc:lr-parse-error-condition ()
            (format t "error: SQL malformed~%"))
+         (ambiguous-field-error (e)
+           (format t "error: ~a is ambiguous.~%" (name e)))
+         (unsupported-feature-error (e)
+           (format t "error: ~a is currently unsupported~%" (name e)))
+         (field-does-not-exist-error (e)
+           (format t "error: field (~a) does not exist~%" (name e)))
          (table-does-not-exist-error (e)
            (format t "error: table (~a) does not exist~%" (name e)))))))
-
-(defun change-file-type (input-file-name file-type)
-  (let ((input-dir-name-end (position #\/ input-file-name :from-end t))
-        (input-file-name-end (position #\. input-file-name :from-end t :test #'char=)))
-    (when input-dir-name-end
-      (let ((input-dir (subseq input-file-name 0 input-dir-name-end))
-            (input-file (string-upcase (subseq input-file-name (+ input-dir-name-end 1)))))
-        (setf input-file-name (format nil "~a/~a" input-dir input-file))))
-    (concatenate 'string (subseq input-file-name 0 input-file-name-end) file-type)))
 
 (defun simpledb ()
   ;;** command-line arguments
@@ -345,14 +179,12 @@ simpledb parser data/schema.txt
               (index-file-name (change-file-type input-file-name ".idx"))
               (type-descriptor (parse-type-descriptor (nth 3 sb-ext:*posix-argv*))))
          (convert input-file-name output-file-name index-file-name type-descriptor)))
-
       ((string= tool-name "parser")
        (when (not (= 3 (length sb-ext:*posix-argv*)))
          (format t *usage-string*)
          (return-from simpledb 1))
        (let ((schema-file-name (nth 2 sb-ext:*posix-argv*)))
          (parser schema-file-name)))
-
       (t
        (format t *usage-string*)
        (return-from simpledb 1)))))

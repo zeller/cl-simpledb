@@ -20,9 +20,6 @@
       (write-debug "Found a file with ~a pages.~%" page-count)))
   (catalog-add-file (sxhash (file-name file)) file))
 
-(defgeneric filter (file filter callback)
-  (:documentation "Calls the callback on each tuple for which the filter is true."))
-
 (defgeneric add-tuple (file tuple)
   (:documentation "Adds a tuple to an file. Returns dirtied pages."))
 
@@ -32,7 +29,7 @@
 (defgeneric print-file (file)
   (:documentation "Prints the contents of a file to *standard-output*"))
 
-(defun print-tuple (tuple type-descriptor record-id)
+(defun print-tuple (tuple type-descriptor)
   (format t "~{~a~^, ~}~%"
           (mapcar #'(lambda (data type)
                       (case type
@@ -43,21 +40,10 @@
 
 (defmethod print-file ((file file))
   (write-debug "Printing file.~%")
-  (filter file nil #'print-tuple))
-
-(defmethod filter ((file file) filter callback)
-  (write-debug "Filtering file.~%")
-  (with-slots (type-descriptor page-count) file
-    (loop for page-number from 0 to (- page-count 1) do 
-         (let ((page (read-page file page-number)))
-           (filter-page page type-descriptor filter callback)))))
-
-;;** filter
-
-(defclass filter ()
-  ((op :initarg :op :accessor op)
-   (field :initarg :field :initform 0 :accessor field)
-   (value :initarg :value :accessor value)))
+  (let ((cursor (make-cursor-for file)))
+    (loop until (cursor-finished-p cursor)
+         for tuple = (cursor-next cursor)
+         do (print-tuple tuple (cursor-type-descriptor cursor)))))
 
 ;;** page 
 
@@ -160,34 +146,8 @@
 (defgeneric read-page (file page-number)
   (:documentation "Reads a page from disk into a page datastructure"))
 
-(defgeneric filter-page (page type-descriptor filter callback)
-  (:documentation "Calls callback on each tuple in page."))
-
 (defgeneric get-binary-page (page type-descriptor)
   (:documentation "Get a binary representation of a page that can be written to disk."))
-
-(defmethod filter-page (page type-descriptor filter callback)
-  (with-slots (tuples record-id) page
-    (write-debug "Filtering page (~a).~%" (page-number record-id))
-    (mapcar #'(lambda (tuple)
-                (when (or (not filter)
-                          (case (nth (field filter) type-descriptor)
-                            ('int 
-                             (case (op filter)
-                               ('= (= (nth (field filter) tuple) (value filter)))
-                               ('< (< (nth (field filter) tuple) (value filter)))
-                               ('> (> (nth (field filter) tuple) (value filter)))
-                               ('<= (<= (nth (field filter) tuple) (value filter)))
-                               ('>= (>= (nth (field filter) tuple) (value filter)))))
-                            ('string
-                             (case (op filter)
-                               ('= (string= (nth (field filter) tuple) (value filter)))
-                               ('< (string< (nth (field filter) tuple) (value filter)))
-                               ('> (string> (nth (field filter) tuple) (value filter)))
-                               ('<= (string<= (nth (field filter) tuple) (value filter)))
-                               ('>= (string>= (nth (field filter) tuple) (value filter)))))))
-                  (funcall callback tuple type-descriptor record-id)))
-            tuples)))
 
 ;; checks bufferpool for page before fetching page from file
 (defmethod read-page :around ((file file) page-number)
@@ -393,9 +353,11 @@
       (setf page-count bin-count)
       (loop for page-number from 0 below bin-count do (read-page file page-number))
       ;; add all of the tuples in source-file into the index
-      (filter source-file nil
-              #'(lambda (tuple type-descriptor record-id)
-                  (add-tuple-to-index file tuple record-id))))))
+      (let ((cursor (make-cursor-for source-file)))
+        (loop until (cursor-finished-p cursor)
+           for tuple = (cursor-next cursor)
+           ;; @todo need to replace nil with a record-id
+           do (add-tuple-to-index file tuple nil))))))
 
 (defmethod add-tuple-to-index ((file index-file) tuple record-id)
   (write-debug "Original tuple: ~S~%" tuple)
@@ -430,25 +392,3 @@
          for dirty = (delete-tuple-from-page page tuple type-descriptor)
          do (when dirty (push dirty dirtied))
          until (zerop (setf page-number (next-page-number page)))) dirtied)))
-
-(defmethod filter ((file index-file) filter callback)
-  ;; @todo IMPORTANT: assumes key is unique, and hence there is only
-  ;; one page to fetch from source-file. need to address this issue.
-  (with-slots (source-file bin-count type-descriptor key-field) file
-    ;; check if the filter is = and the field is our key-field, if so
-    ;; we can use the index to filter
-    (if (and filter (eq (op filter) '=) (eq (field filter) key-field))
-        ;; use (value filter) to find correct page(s) in the index
-        (let ((page-number (mod (sxhash (value filter)) bin-count)))
-          (loop for page = (read-page file page-number)
-             do
-               ;; search page for key, and if found, calls filter-page
-               ;; on the page the tuple can be found
-               (filter-page page type-descriptor (make-instance 'filter :op '= 
-                                                                :value (value filter))
-                            #'(lambda (tuple type-descriptor record-id)
-                                (filter-page (read-page source-file (nth 1 tuple))
-                                             (type-descriptor source-file) filter callback)))
-             until (zerop (setf page-number (next-page-number page)))))
-        ;; defer to the source-file to see if it can do any better
-        (filter source-file filter callback))))

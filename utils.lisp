@@ -3,7 +3,7 @@
 ;;** some helper functions
 
 (defmacro write-debug (&rest args)
-  (if nil ;; set to t or nil to toggle debugging information output
+  (if t ;; set to t or nil to toggle debugging information output
       `(format t ,@args)))
 
 ;;** some utility methods
@@ -36,3 +36,34 @@
     (write-debug "Clearing the bufferpool.~%")
     (clear-bufferpool) ;; flushes all pages to disk
     heap-file))
+
+(defun change-file-type (input-file-name file-type)
+  (let ((input-dir-name-end (position #\/ input-file-name :from-end t))
+        (input-file-name-end (position #\. input-file-name :from-end t :test #'char=)))
+    (when input-dir-name-end
+      (let ((input-dir (subseq input-file-name 0 input-dir-name-end))
+            (input-file (string-upcase (subseq input-file-name (+ input-dir-name-end 1)))))
+        (setf input-file-name (format nil "~a/~a" input-dir input-file))))
+    (concatenate 'string (subseq input-file-name 0 input-file-name-end) file-type)))
+
+(defun parse-type-descriptor (type-descriptor-string)
+  (map 'list
+       #'(lambda (type)
+           (cond
+             ((string= "int" type) 'int)
+             ((string= "string" type) 'string)
+             (t nil)))
+       (cl-ppcre:split "," type-descriptor-string)))
+
+
+(defun reorder (list-of-items order)
+  (if order
+    (mapcar #'(lambda (pos) (nth pos list-of-items)) order)
+    list-of-items))
+
+(defun flatten (l)
+  (cond
+    ((null l) nil)
+    ((atom l) (list l))
+    (t (append (flatten (car l))
+               (flatten (cdr l))))))
